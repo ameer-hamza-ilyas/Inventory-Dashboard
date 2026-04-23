@@ -1,0 +1,130 @@
+=====================================================
+  PLAN: Create React + TypeScript Project
+  Location: C:\Users\PMLS\Desktop\Inventory Dashboard
+  Date: 2026-04-24
+=====================================================
+
+OVERVIEW
+--------
+Set up a React project with TypeScript using Vite as the build tool.
+Vite is preferred over Create React App (CRA) because it is faster,
+actively maintained, and produces smaller builds.
+
+-----------------------------------------------------
+STEP 1 — Check Prerequisites
+-----------------------------------------------------
+Make sure the following are installed:
+  - Node.js (v18 or higher recommended)  → node --version
+  - npm (comes with Node.js)             → npm --version
+
+If Node.js is not installed, download it from: https://nodejs.org
+
+-----------------------------------------------------
+STEP 2 — Scaffold the Project with Vite
+-----------------------------------------------------
+Run this command inside the "Inventory Dashboard" folder:
+
+  npm create vite@latest . -- --template react-ts
+
+  - The dot (.) means "use the current folder"
+  - "--template react-ts" sets up React with TypeScript
+
+When prompted, confirm that you want to scaffold into the
+existing directory (type "y" and press Enter).
+
+-----------------------------------------------------
+STEP 3 — Install Dependencies
+-----------------------------------------------------
+After scaffolding, install all packages:
+
+  npm install
+
+-----------------------------------------------------
+STEP 4 — Project Structure Created
+-----------------------------------------------------
+Vite will generate the following structure:
+
+  Inventory Dashboard/
+  ├── public/               → Static assets (favicon, etc.)
+  ├── src/
+  │   ├── assets/           → Images, fonts, etc.
+  │   ├── App.tsx           → Root component
+  │   ├── App.css           → Root styles
+  │   ├── main.tsx          → App entry point
+  │   └── vite-env.d.ts     → TypeScript Vite types
+  ├── index.html            → HTML entry point
+  ├── tsconfig.json         → TypeScript configuration
+  ├── tsconfig.node.json    → TypeScript config for Vite config file
+  ├── vite.config.ts        → Vite configuration
+  └── package.json          → Dependencies and scripts
+
+-----------------------------------------------------
+STEP 5 — Start the Development Server
+-----------------------------------------------------
+Run the dev server:
+
+  npm run dev
+
+The app will open at: http://localhost:5173
+
+-----------------------------------------------------
+STEP 6 — Add Common Libraries (Optional)
+-----------------------------------------------------
+Depending on the project needs, consider adding:
+
+  UI / Styling:
+    npm install tailwindcss @tailwindcss/vite     (Tailwind CSS)
+    npm install @mui/material @emotion/react       (Material UI)
+
+  Routing:
+    npm install react-router-dom
+    npm install -D @types/react-router-dom
+
+  State Management:
+    npm install zustand                            (lightweight)
+    npm install @reduxjs/toolkit react-redux       (Redux Toolkit)
+
+  HTTP Requests:
+    npm install axios
+
+  Charts (useful for Inventory Dashboard):
+    npm install recharts
+    npm install -D @types/recharts
+
+-----------------------------------------------------
+STEP 7 — Useful Scripts
+-----------------------------------------------------
+  npm run dev       → Start development server
+  npm run build     → Build for production (outputs to /dist)
+  npm run preview   → Preview the production build locally
+  npm run lint      → Run ESLint (if configured)
+
+-----------------------------------------------------
+STEP 8 — TypeScript Tips
+-----------------------------------------------------
+- All component files use .tsx extension (not .js/.jsx)
+- All non-JSX TypeScript files use .ts extension
+- tsconfig.json controls TypeScript strictness settings
+- Type your props with interfaces:
+
+    interface Props {
+      title: string;
+      count: number;
+    }
+
+    const MyComponent = ({ title, count }: Props) => {
+      return <div>{title}: {count}</div>;
+    };
+
+-----------------------------------------------------
+SUMMARY OF COMMANDS (copy-paste ready)
+-----------------------------------------------------
+  node --version
+  npm --version
+  npm create vite@latest . -- --template react-ts
+  npm install
+  npm run dev
+
+=====================================================
+END OF PLAN
+=====================================================

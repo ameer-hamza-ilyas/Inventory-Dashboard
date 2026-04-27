@@ -2,12 +2,20 @@ export interface LedgerEntry {
   date: string;   // YYYY-MM-DD
   sku: string;
   onHandQty: number;
+  asin: string;
+  fnsku: string;
+  countryCode: string;
 }
 
 export interface OrderEntry {
   date: string;   // YYYY-MM-DD
   sku: string;
   unitsSold: number;
+  revenue: number;      // total price for this order line (0 when no price column found)
+  priceFound: boolean;  // true when the CSV had a recognisable price column
+  asin: string;
+  fnsku: string;
+  countryCode: string;
 }
 
 export type DateRangeOption = '30' | '60' | '90' | 'custom';
@@ -18,17 +26,33 @@ export interface DateRange {
   customEnd: string;
 }
 
-export interface SkuForecast {
-  sku: string;
-  totalUnitsSold: number;
-  oosDays: number;
-  inStockDays: number;
-  adjustedDailyAvg: number;
-  forecast30: number;
-  forecast60: number;
-  forecast90: number;
-  oosDateSet: Set<string>;
+export interface DailyPoint {
+  date: string;     // YYYY-MM-DD
+  units: number;
+  revenue: number;
+  isOos: boolean;
 }
 
-export type SortKey = keyof Omit<SkuForecast, 'oosDateSet'>;
+export interface SkuForecast {
+  sku: string;
+  asin: string;
+  fnsku: string;
+  countryCode: string;
+  totalUnitsSold: number;
+  totalRevenue: number;
+  hasPriceData: boolean;
+  oosDays: number;
+  inStockDays: number;
+  avg7: number;
+  avg15: number;
+  avg30: number;
+  avg60: number;
+  avg90: number;
+  oosDateSet: Set<string>;
+  dailyData: DailyPoint[];
+}
+
+// hasPriceData and dailyData are internal — excluded from sort keys
+export type SortKey = keyof Omit<SkuForecast, 'oosDateSet' | 'dailyData' | 'hasPriceData'>;
 export type SortDir = 'asc' | 'desc';
+export type FilterKey = 'sku' | 'asin' | 'fnsku' | 'countryCode';

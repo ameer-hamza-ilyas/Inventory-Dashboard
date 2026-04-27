@@ -59,7 +59,10 @@ export function parseLedgerCsv(text: string): LedgerEntry[] {
   const first = rows[0];
 
   const dateCol = findCol(first, ['date', 'reportingdate', 'snapshotdate']);
-  const skuCol = findCol(first, ['msku', 'merchantsku', 'sellersku', 'sku', 'fnsku']);
+  // Prefer Seller/Merchant SKU; fall back to FNSKU only if nothing else found
+  const skuCol =
+    findCol(first, ['msku', 'merchantsku', 'sellersku', 'sku']) ??
+    findCol(first, ['fnsku', 'fulfillmentnetworksku']);
   const qtyCol = findCol(first, [
     'endingwarehousebalance',
     'endingbalance',
@@ -68,6 +71,12 @@ export function parseLedgerCsv(text: string): LedgerEntry[] {
     'quantity',
     'closingbalance',
     'balance',
+  ]);
+  const asinCol = findCol(first, ['asin']);
+  const fnskuCol = findCol(first, ['fnsku', 'fulfillmentnetworksku']);
+  const countryCodeCol = findCol(first, [
+    'countrycode', 'country', 'saleschannel', 'marketplace',
+    'marketplaceid', 'marketplacename', 'countrysalesregion',
   ]);
 
   if (!dateCol || !skuCol || !qtyCol) {
@@ -89,6 +98,9 @@ export function parseLedgerCsv(text: string): LedgerEntry[] {
     const date = parseDate(rawDate);
     const sku = rawSku.trim();
     const qty = parseInt(rawQty.replace(/,/g, ''), 10) || 0;
+    const asin = asinCol ? (row[asinCol] ?? '').trim() : '';
+    const fnsku = fnskuCol ? (row[fnskuCol] ?? '').trim() : '';
+    const countryCode = countryCodeCol ? (row[countryCodeCol] ?? '').trim() : '';
 
     if (!date || !sku) continue;
 
@@ -96,8 +108,11 @@ export function parseLedgerCsv(text: string): LedgerEntry[] {
     const existing = map.get(key);
     if (existing) {
       existing.onHandQty += qty;
+      if (!existing.asin && asin) existing.asin = asin;
+      if (!existing.fnsku && fnsku) existing.fnsku = fnsku;
+      if (!existing.countryCode && countryCode) existing.countryCode = countryCode;
     } else {
-      map.set(key, { date, sku, onHandQty: qty });
+      map.set(key, { date, sku, onHandQty: qty, asin, fnsku, countryCode });
     }
   }
 
@@ -120,6 +135,20 @@ export function parseOrdersCsv(text: string): OrderEntry[] {
   const qtyCol = findCol(first, [
     'quantity', 'unitssold', 'units', 'qty', 'quantityordered', 'quantityshipped',
   ]);
+  // Amazon Orders Report: item-price is the total price for the line item
+  const priceCol = findCol(first, [
+    'itemprice', 'itempriceamount', 'price', 'unitprice',
+    'saleprice', 'amount', 'revenue', 'saleamount', 'lineamount',
+    'productprice', 'totalprice', 'itemamount',
+  ]);
+  const priceFound = !!priceCol;
+
+  const asinCol = findCol(first, ['asin']);
+  const fnskuCol = findCol(first, ['fnsku', 'fulfillmentnetworksku']);
+  const countryCodeCol = findCol(first, [
+    'countrycode', 'country', 'saleschannel', 'marketplace',
+    'marketplaceid', 'marketplacename', 'shipservicelvl',
+  ]);
 
   if (!dateCol || !skuCol || !qtyCol) {
     throw new Error(
@@ -129,17 +158,23 @@ export function parseOrdersCsv(text: string): OrderEntry[] {
     );
   }
 
-  // Aggregate units sold by date+SKU
+  // Aggregate units sold and revenue by date+SKU
   const map = new Map<string, OrderEntry>();
 
   for (const row of rows) {
     const rawDate = row[dateCol] ?? '';
     const rawSku = row[skuCol] ?? '';
     const rawQty = row[qtyCol] ?? '0';
+    const rawPrice = priceCol ? (row[priceCol] ?? '0') : '0';
 
     const date = parseDate(rawDate);
     const sku = rawSku.trim();
     const qty = parseInt(rawQty.replace(/,/g, ''), 10) || 0;
+    // Strip currency symbols and commas, then parse as float
+    const revenue = parseFloat(rawPrice.replace(/[^0-9.\-]/g, '')) || 0;
+    const asin = asinCol ? (row[asinCol] ?? '').trim() : '';
+    const fnsku = fnskuCol ? (row[fnskuCol] ?? '').trim() : '';
+    const countryCode = countryCodeCol ? (row[countryCodeCol] ?? '').trim() : '';
 
     if (!date || !sku || qty <= 0) continue;
 
@@ -147,8 +182,12 @@ export function parseOrdersCsv(text: string): OrderEntry[] {
     const existing = map.get(key);
     if (existing) {
       existing.unitsSold += qty;
+      existing.revenue += revenue;
+      if (!existing.asin && asin) existing.asin = asin;
+      if (!existing.fnsku && fnsku) existing.fnsku = fnsku;
+      if (!existing.countryCode && countryCode) existing.countryCode = countryCode;
     } else {
-      map.set(key, { date, sku, unitsSold: qty });
+      map.set(key, { date, sku, unitsSold: qty, revenue, priceFound, asin, fnsku, countryCode });
     }
   }
 

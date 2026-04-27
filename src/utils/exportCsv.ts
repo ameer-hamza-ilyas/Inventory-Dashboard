@@ -3,24 +3,34 @@ import type { SkuForecast } from '../types';
 export function exportForecastCsv(forecasts: SkuForecast[]): void {
   const headers = [
     'SKU',
+    'ASIN',
+    'FNSKU',
+    'Country Code',
     'Total Units Sold',
+    'Revenue',
     'Out-of-Stock Days',
     'In-Stock Days',
-    'Adjusted Daily Avg',
-    '30-Day Forecast',
-    '60-Day Forecast',
-    '90-Day Forecast',
+    '7-Day Avg',
+    '15-Day Avg',
+    '30-Day Avg',
+    '60-Day Avg',
+    '90-Day Avg',
   ];
 
   const rows = forecasts.map((f) => [
     f.sku,
+    f.asin,
+    f.fnsku,
+    f.countryCode,
     f.totalUnitsSold,
+    f.hasPriceData ? f.totalRevenue.toFixed(2) : '',
     f.oosDays,
     f.inStockDays,
-    f.adjustedDailyAvg.toFixed(2),
-    f.forecast30,
-    f.forecast60,
-    f.forecast90,
+    f.avg7.toFixed(2),
+    f.avg15.toFixed(2),
+    f.avg30.toFixed(2),
+    f.avg60.toFixed(2),
+    f.avg90.toFixed(2),
   ]);
 
   const csvContent = [headers, ...rows]

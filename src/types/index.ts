@@ -56,3 +56,15 @@ export interface SkuForecast {
 export type SortKey = keyof Omit<SkuForecast, 'oosDateSet' | 'dailyData' | 'hasPriceData'>;
 export type SortDir = 'asc' | 'desc';
 export type FilterKey = 'sku' | 'asin' | 'fnsku' | 'countryCode';
+
+export interface WeightConfig {
+  w7: number;
+  w15: number;
+  w30: number;
+  w60: number;
+  w90: number;
+}
+
+export const DEFAULT_WEIGHT: WeightConfig = {
+  w7: 20, w15: 20, w30: 20, w60: 20, w90: 20,
+};

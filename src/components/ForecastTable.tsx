@@ -1,13 +1,17 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useMemo, useState, useEffect, useRef } from 'react';
 import { format, subDays, parseISO, isValid } from 'date-fns';
 import { useAppContext } from '../context/AppContext';
 import { computeForecasts } from '../utils/calculations';
 import { exportForecastCsv } from '../utils/exportCsv';
 import MiniChart from './MiniChart';
 import SummaryChart from './SummaryChart';
-import type { SkuForecast, SortKey, SortDir, FilterKey, DateRange } from '../types';
+import WeightModal from './WeightModal';
+import type { SkuForecast, SortKey, SortDir, FilterKey, DateRange, WeightConfig } from '../types';
+import { DEFAULT_WEIGHT } from '../types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+type ExtSortKey = SortKey | 'weightedAvg';
 
 function getRangeLabel(range: DateRange): string {
   const today = new Date();
@@ -28,6 +32,24 @@ function fmtRevenue(v: number): string {
   return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function getWeight(weightConfigs: Record<string, WeightConfig>, sku: string): WeightConfig {
+  return weightConfigs[sku] ?? DEFAULT_WEIGHT;
+}
+
+function computeWeightedAvg(row: SkuForecast, w: WeightConfig): number {
+  return (
+    row.avg7  * w.w7  / 100 +
+    row.avg15 * w.w15 / 100 +
+    row.avg30 * w.w30 / 100 +
+    row.avg60 * w.w60 / 100 +
+    row.avg90 * w.w90 / 100
+  );
+}
+
+function isDefaultWeight(w: WeightConfig): boolean {
+  return w.w7 === 20 && w.w15 === 20 && w.w30 === 20 && w.w60 === 20 && w.w90 === 20;
+}
+
 // ─── Column definitions ───────────────────────────────────────────────────────
 
 const COLUMNS: { key: SortKey; label: string; rangeScoped?: boolean; filterable?: boolean }[] = [
@@ -46,6 +68,9 @@ const COLUMNS: { key: SortKey; label: string; rangeScoped?: boolean; filterable?
   { key: 'avg90',          label: '90-Day Avg' },
 ];
 
+// Checkbox(1) + COLUMNS(13) + WeightedAvg(1) + WeightConfig(1) + Chart(1) = 17
+const TOTAL_COLS = COLUMNS.length + 4;
+
 const EMPTY_FILTERS: Record<FilterKey, string> = {
   sku: '', asin: '', fnsku: '', countryCode: '',
 };
@@ -61,13 +86,35 @@ interface RowProps {
   row: SkuForecast;
   expanded: boolean;
   onToggle: () => void;
+  selected: boolean;
+  onSelect: () => void;
+  weightConfig: WeightConfig;
+  weightedAvg: number;
+  onEditWeight: () => void;
 }
 
-function ForecastRow({ row, expanded, onToggle }: RowProps) {
-  const hasOos = row.oosDays > 0;
+function ForecastRow({
+  row, expanded, onToggle,
+  selected, onSelect,
+  weightConfig, weightedAvg, onEditWeight,
+}: RowProps) {
+  const hasOos   = row.oosDays > 0;
+  const isCustom = !isDefaultWeight(weightConfig);
 
   return (
     <tr className={`forecast-table__row${expanded ? ' forecast-table__row--expanded' : ''}`}>
+      {/* Checkbox */}
+      <td className="forecast-table__td forecast-table__td--checkbox" onClick={e => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          className="row-checkbox"
+          checked={selected}
+          onChange={onSelect}
+          aria-label={`Select ${row.sku}`}
+        />
+      </td>
+
+      {/* Standard columns */}
       <td className="forecast-table__td forecast-table__td--id">{row.sku}</td>
       <td className="forecast-table__td forecast-table__td--id">{row.asin || '—'}</td>
       <td className="forecast-table__td forecast-table__td--id">{row.fnsku || '—'}</td>
@@ -87,7 +134,30 @@ function ForecastRow({ row, expanded, onToggle }: RowProps) {
       <td className="forecast-table__td forecast-table__td--avg">{row.avg30.toFixed(2)}</td>
       <td className="forecast-table__td forecast-table__td--avg">{row.avg60.toFixed(2)}</td>
       <td className="forecast-table__td forecast-table__td--avg">{row.avg90.toFixed(2)}</td>
-      {/* Graph cell — click to expand */}
+
+      {/* Weighted Forecast Average */}
+      <td className="forecast-table__td forecast-table__td--weighted">
+        {weightedAvg.toFixed(2)}
+      </td>
+
+      {/* Weightage Config */}
+      <td className="forecast-table__td forecast-table__td--weight-cfg">
+        <div className="weight-cell">
+          <span className={`weight-cell__badge${isCustom ? ' weight-cell__badge--custom' : ''}`}>
+            {isCustom ? 'Custom' : 'Default'}
+          </span>
+          {isCustom && (
+            <span className="weight-cell__summary">
+              {weightConfig.w7}|{weightConfig.w15}|{weightConfig.w30}|{weightConfig.w60}|{weightConfig.w90}
+            </span>
+          )}
+          <button className="weight-cell__edit" onClick={onEditWeight} title="Configure weights">
+            ✏ Edit
+          </button>
+        </div>
+      </td>
+
+      {/* Graph cell */}
       <td className="forecast-table__td forecast-table__td--chart" onClick={onToggle}>
         <div className="mini-chart-wrap">
           <MiniChart data={row.dailyData} height={48} />
@@ -104,10 +174,27 @@ function ForecastRow({ row, expanded, onToggle }: RowProps) {
 
 export default function ForecastTable() {
   const { state } = useAppContext();
-  const [sortKey, setSortKey]       = useState<SortKey>('sku');
-  const [sortDir, setSortDir]       = useState<SortDir>('asc');
-  const [filters, setFilters]       = useState<Record<FilterKey, string>>(EMPTY_FILTERS);
+  const [sortKey, setSortKey]         = useState<ExtSortKey>('sku');
+  const [sortDir, setSortDir]         = useState<SortDir>('asc');
+  const [filters, setFilters]         = useState<Record<FilterKey, string>>(EMPTY_FILTERS);
   const [expandedSku, setExpandedSku] = useState<string | null>(null);
+  const [selectedSkus, setSelectedSkus] = useState<Set<string>>(new Set());
+  const [modalTargetSkus, setModalTargetSkus] = useState<string[] | null>(null);
+
+  // Weight configs — persisted to localStorage
+  const [weightConfigs, setWeightConfigs] = useState<Record<string, WeightConfig>>(() => {
+    try {
+      const stored = localStorage.getItem('inv-weight-configs');
+      return stored ? JSON.parse(stored) : {};
+    } catch { return {}; }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('inv-weight-configs', JSON.stringify(weightConfigs));
+  }, [weightConfigs]);
+
+  // Select-all checkbox indeterminate state
+  const selectAllRef = useRef<HTMLInputElement>(null);
 
   const forecasts = useMemo(
     () => computeForecasts(state.ledger, state.orders, state.dateRange),
@@ -128,8 +215,13 @@ export default function ForecastTable() {
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
-      const av = a[sortKey];
-      const bv = b[sortKey];
+      if (sortKey === 'weightedAvg') {
+        const aw = computeWeightedAvg(a, getWeight(weightConfigs, a.sku));
+        const bw = computeWeightedAvg(b, getWeight(weightConfigs, b.sku));
+        return sortDir === 'asc' ? aw - bw : bw - aw;
+      }
+      const av = a[sortKey as SortKey];
+      const bv = b[sortKey as SortKey];
       if (typeof av === 'string' && typeof bv === 'string') {
         return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
       }
@@ -137,9 +229,19 @@ export default function ForecastTable() {
         ? (av as number) - (bv as number)
         : (bv as number) - (av as number);
     });
-  }, [filtered, sortKey, sortDir]);
+  }, [filtered, sortKey, sortDir, weightConfigs]);
 
-  function toggleSort(key: SortKey) {
+  // Selection state derived values
+  const allVisibleSelected  = sorted.length > 0 && sorted.every(r => selectedSkus.has(r.sku));
+  const someVisibleSelected = sorted.some(r => selectedSkus.has(r.sku));
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someVisibleSelected && !allVisibleSelected;
+    }
+  }, [someVisibleSelected, allVisibleSelected]);
+
+  function toggleSort(key: ExtSortKey) {
     if (key === sortKey) {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     } else {
@@ -150,6 +252,36 @@ export default function ForecastTable() {
 
   function setFilter(key: FilterKey, value: string) {
     setFilters((f) => ({ ...f, [key]: value }));
+  }
+
+  function toggleSelectAll() {
+    setSelectedSkus(prev => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        sorted.forEach(r => next.delete(r.sku));
+      } else {
+        sorted.forEach(r => next.add(r.sku));
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectSku(sku: string) {
+    setSelectedSkus(prev => {
+      const next = new Set(prev);
+      if (next.has(sku)) next.delete(sku); else next.add(sku);
+      return next;
+    });
+  }
+
+  function handleModalApply(weight: WeightConfig) {
+    if (!modalTargetSkus) return;
+    setWeightConfigs(prev => {
+      const next = { ...prev };
+      for (const sku of modalTargetSkus) next[sku] = { ...weight };
+      return next;
+    });
+    setModalTargetSkus(null);
   }
 
   const hasData = state.ledger.length > 0 || state.orders.length > 0;
@@ -190,7 +322,9 @@ export default function ForecastTable() {
     );
   }
 
-  const totalCols = COLUMNS.length + 1; // +1 for the Graph column
+  const modalInitialWeight = modalTargetSkus
+    ? getWeight(weightConfigs, modalTargetSkus[0])
+    : DEFAULT_WEIGHT;
 
   return (
     <div className="forecast-section">
@@ -205,12 +339,20 @@ export default function ForecastTable() {
           )}
         </h2>
         <div className="forecast-section__actions">
+          {selectedSkus.size > 0 && (
+            <button
+              className="btn btn--weight-apply"
+              onClick={() => setModalTargetSkus(Array.from(selectedSkus))}
+            >
+              ⚖ Apply Weightage to {selectedSkus.size} SKU{selectedSkus.size !== 1 ? 's' : ''}
+            </button>
+          )}
           {isFiltered && (
             <button className="btn btn--outline" onClick={() => setFilters(EMPTY_FILTERS)}>
               Clear Filters
             </button>
           )}
-          <button className="btn btn--export" onClick={() => exportForecastCsv(sorted)}>
+          <button className="btn btn--export" onClick={() => exportForecastCsv(sorted, weightConfigs)}>
             ⬇ Export CSV
           </button>
         </div>
@@ -229,6 +371,20 @@ export default function ForecastTable() {
           <thead>
             {/* Sort header */}
             <tr>
+              {/* Select-all checkbox */}
+              <th className="forecast-table__th forecast-table__th--checkbox">
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  className="row-checkbox"
+                  checked={allVisibleSelected}
+                  onChange={toggleSelectAll}
+                  aria-label="Select all SKUs"
+                  title={allVisibleSelected ? 'Deselect all' : 'Select all visible SKUs'}
+                />
+              </th>
+
+              {/* Standard columns */}
               {COLUMNS.map((col) => (
                 <th
                   key={col.key}
@@ -242,10 +398,29 @@ export default function ForecastTable() {
                   <SortIcon active={sortKey === col.key} dir={sortDir} />
                 </th>
               ))}
+
+              {/* Weighted Forecast Average */}
+              <th
+                className="forecast-table__th forecast-table__th--weighted"
+                onClick={() => toggleSort('weightedAvg')}
+                title="Weighted Forecast Average — calculated from custom period weights"
+              >
+                Weighted Avg
+                <SortIcon active={sortKey === 'weightedAvg'} dir={sortDir} />
+              </th>
+
+              {/* Weightage Config */}
+              <th className="forecast-table__th forecast-table__th--weight-cfg">
+                Weightage Config
+              </th>
+
+              {/* Chart */}
               <th className="forecast-table__th forecast-table__th--chart">Chart</th>
             </tr>
+
             {/* Filter row */}
             <tr>
+              <th className="forecast-table__filter-th" />
               {COLUMNS.map((col) => (
                 <th key={col.key} className="forecast-table__filter-th">
                   {col.filterable ? (
@@ -261,23 +436,30 @@ export default function ForecastTable() {
                 </th>
               ))}
               <th className="forecast-table__filter-th" />
+              <th className="forecast-table__filter-th" />
+              <th className="forecast-table__filter-th" />
             </tr>
           </thead>
           <tbody>
             {sorted.map((row) => {
-              const isExpanded = expandedSku === row.sku;
+              const isExpanded  = expandedSku === row.sku;
+              const wCfg        = getWeight(weightConfigs, row.sku);
+              const wAvg        = computeWeightedAvg(row, wCfg);
               return (
                 <Fragment key={row.sku}>
                   <ForecastRow
                     row={row}
                     expanded={isExpanded}
-                    onToggle={() =>
-                      setExpandedSku((prev) => (prev === row.sku ? null : row.sku))
-                    }
+                    onToggle={() => setExpandedSku((prev) => (prev === row.sku ? null : row.sku))}
+                    selected={selectedSkus.has(row.sku)}
+                    onSelect={() => toggleSelectSku(row.sku)}
+                    weightConfig={wCfg}
+                    weightedAvg={wAvg}
+                    onEditWeight={() => setModalTargetSkus([row.sku])}
                   />
                   {isExpanded && (
                     <tr className="forecast-table__chart-row">
-                      <td colSpan={totalCols} className="forecast-table__chart-cell">
+                      <td colSpan={TOTAL_COLS} className="forecast-table__chart-cell">
                         <div className="expanded-chart">
                           <div className="expanded-chart__header">
                             <span className="expanded-chart__sku">{row.sku}</span>
@@ -317,6 +499,16 @@ export default function ForecastTable() {
           </tbody>
         </table>
       </div>
+
+      {/* Weight editor modal */}
+      {modalTargetSkus && (
+        <WeightModal
+          targetSkus={modalTargetSkus}
+          initialWeight={modalInitialWeight}
+          onApply={handleModalApply}
+          onClose={() => setModalTargetSkus(null)}
+        />
+      )}
     </div>
   );
 }

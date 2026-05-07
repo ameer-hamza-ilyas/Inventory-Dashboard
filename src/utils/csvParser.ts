@@ -1,6 +1,6 @@
 import Papa from 'papaparse';
 import { format, parseISO, isValid } from 'date-fns';
-import type { LedgerEntry, OrderEntry } from '../types';
+import type { LedgerEntry, OrderEntry, CostPricingEntry, SupplierImportEntry, ParentProductEntry } from '../types';
 
 type RawRow = Record<string, string>;
 
@@ -192,4 +192,98 @@ export function parseOrdersCsv(text: string): OrderEntry[] {
   }
 
   return Array.from(map.values());
+}
+
+// ─── Cost & Pricing Report ────────────────────────────────────────────────────
+// Expected columns: SKU, Unit Cost, Selling Price
+export function parseCostPricingCsv(text: string): CostPricingEntry[] {
+  const rows = parseCsvText(text);
+  if (rows.length === 0) return [];
+  const first = rows[0];
+
+  const skuCol   = findCol(first, ['sku', 'merchantsku', 'sellersku', 'msku', 'asin', 'skuid']);
+  const costCol  = findCol(first, ['unitcost', 'cost', 'costperunit', 'purchasecost', 'cogs', 'landedcost', 'buyingcost']);
+  const priceCol = findCol(first, ['sellingprice', 'price', 'listprice', 'saleprice', 'retailprice', 'salesprice']);
+
+  if (!skuCol || !costCol || !priceCol) {
+    throw new Error(
+      `Could not identify required columns in Cost & Pricing Report.\n` +
+      `Expected: SKU, Unit Cost, and Selling Price columns.\n` +
+      `Found columns: ${Object.keys(first).join(', ')}`
+    );
+  }
+
+  const map = new Map<string, CostPricingEntry>();
+  for (const row of rows) {
+    const sku          = (row[skuCol]   ?? '').trim();
+    const unitCost     = parseFloat((row[costCol]  ?? '0').replace(/[^0-9.\-]/g, '')) || 0;
+    const sellingPrice = parseFloat((row[priceCol] ?? '0').replace(/[^0-9.\-]/g, '')) || 0;
+    if (!sku) continue;
+    map.set(sku, { sku, unitCost, sellingPrice });
+  }
+  return Array.from(map.values());
+}
+
+// ─── Supplier Data ────────────────────────────────────────────────────────────
+// Expected columns: Supplier Name, SKU, Lead Time Days, On-Time Delivery Rate, Quality Score
+export function parseSupplierCsv(text: string): SupplierImportEntry[] {
+  const rows = parseCsvText(text);
+  if (rows.length === 0) return [];
+  const first = rows[0];
+
+  const supplierCol = findCol(first, ['suppliername', 'supplier', 'vendor', 'vendorname', 'manufacturer']);
+  const skuCol      = findCol(first, ['sku', 'merchantsku', 'sellersku', 'msku', 'skuid']);
+  const leadCol     = findCol(first, ['leadtime', 'leadtimedays', 'leaddays', 'deliverytimedays', 'deliverytime']);
+  const onTimeCol   = findCol(first, ['ontimedelivery', 'ontime', 'ontimerate', 'deliveryrate', 'deliveryscore', 'ontimedeliveryrate', 'ontimepct']);
+  const qualityCol  = findCol(first, ['qualityscore', 'quality', 'qualityrate', 'score', 'qualitypct']);
+
+  if (!supplierCol || !skuCol) {
+    throw new Error(
+      `Could not identify required columns in Supplier Data.\n` +
+      `Expected: Supplier Name and SKU columns.\n` +
+      `Found columns: ${Object.keys(first).join(', ')}`
+    );
+  }
+
+  return rows
+    .map(row => ({
+      supplierName:       (row[supplierCol] ?? '').trim(),
+      sku:                (row[skuCol]      ?? '').trim(),
+      leadTimeDays:       leadCol    ? (parseInt((row[leadCol]    ?? '0').replace(/[^0-9]/g,   '')) || 0) : 0,
+      onTimeDeliveryRate: onTimeCol  ? (parseFloat((row[onTimeCol]  ?? '0').replace(/[^0-9.]/g, '')) || 0) : 0,
+      qualityScore:       qualityCol ? (parseFloat((row[qualityCol] ?? '0').replace(/[^0-9.]/g, '')) || 0) : 0,
+    }))
+    .filter(e => e.supplierName && e.sku);
+}
+
+// ─── Parent Product Mapping ───────────────────────────────────────────────────
+// Expected columns: Parent Product ID, Parent Product Name, Child SKU, Child ASIN, Child FNSKU
+export function parseParentProductCsv(text: string): ParentProductEntry[] {
+  const rows = parseCsvText(text);
+  if (rows.length === 0) return [];
+  const first = rows[0];
+
+  const parentIdCol   = findCol(first, ['parentproductid', 'parentid', 'parentasin', 'parent', 'productid', 'parentsku']);
+  const parentNameCol = findCol(first, ['parentproductname', 'parentname', 'productname', 'name', 'title', 'parenttitle']);
+  const childSkuCol   = findCol(first, ['childsku', 'sku', 'merchantsku', 'sellersku', 'msku', 'skuid']);
+  const childAsinCol  = findCol(first, ['childasin', 'asin', 'childasin']);
+  const childFnskuCol = findCol(first, ['childfnsku', 'fnsku', 'childfnsku']);
+
+  if (!parentIdCol || !childSkuCol) {
+    throw new Error(
+      `Could not identify required columns in Parent Product Report.\n` +
+      `Expected: Parent Product ID and Child SKU columns.\n` +
+      `Found columns: ${Object.keys(first).join(', ')}`
+    );
+  }
+
+  return rows
+    .map(row => ({
+      parentId:   (row[parentIdCol]   ?? '').trim(),
+      parentName: parentNameCol ? (row[parentNameCol] ?? '').trim() : (row[parentIdCol] ?? '').trim(),
+      childSku:   (row[childSkuCol]   ?? '').trim(),
+      childAsin:  childAsinCol  ? (row[childAsinCol]  ?? '').trim() : '',
+      childFnsku: childFnskuCol ? (row[childFnskuCol] ?? '').trim() : '',
+    }))
+    .filter(e => e.parentId && e.childSku);
 }

@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { AppProvider } from './context/AppContext';
 import Sidebar, { type Page } from './components/Sidebar';
-import FileImport from './components/FileImport';
 import DateRangeFilter from './components/DateRangeFilter';
 import ForecastTable from './components/ForecastTable';
 import InventoryOverview from './pages/InventoryOverview';
+import DataImport from './pages/DataImport';
 import './App.css';
 
 export default function App() {
@@ -16,7 +16,9 @@ export default function App() {
         <Sidebar currentPage={page} onNavigate={setPage} />
         <div className="app-content">
           <div className={`page-view page-view--${page}`} key={page}>
-            {page === 'forecast' ? <ForecastPage /> : <InventoryOverview />}
+            {page === 'forecast' ? <ForecastPage />
+              : page === 'inventory' ? <InventoryOverview />
+              : <DataImport />}
           </div>
         </div>
       </div>
@@ -32,13 +34,6 @@ function ForecastPage() {
         <p className="page__subtitle">Analyze sales velocity and forecast future demand</p>
       </div>
       <div className="page__body">
-        <section className="section">
-          <h2 className="section__title">Data Import</h2>
-          <div className="import-grid">
-            <FileImport type="ledger" />
-            <FileImport type="orders" />
-          </div>
-        </section>
         <section className="section">
           <h2 className="section__title">Filter</h2>
           <DateRangeFilter />

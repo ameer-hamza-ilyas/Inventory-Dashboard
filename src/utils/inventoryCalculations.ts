@@ -1,4 +1,4 @@
-import { LedgerEntry, OrderEntry, DateRange } from '../types';
+import { LedgerEntry, OrderEntry, DateRange, CostPricingEntry, SupplierImportEntry, ParentProductEntry } from '../types';
 import { subDays, startOfDay } from 'date-fns';
 
 function hash(s: string): number {
@@ -35,7 +35,15 @@ export interface SkuInventoryData {
   onTimeDeliveryRate: number; qualityScore: number;
   reorderQty: number; optimalStock: number; poCount: number; totalPOValue: number;
   turnoverRatio: number;
-  abcClass: 'A' | 'B' | 'C';
+  // ABC classifications
+  abcClass: 'A' | 'B' | 'C';       // alias for abcRevClass (backward compat)
+  abcRevClass: 'A' | 'B' | 'C';    // by revenue, count-based 20/30/50
+  abcProfitClass: 'A' | 'B' | 'C'; // by profit, count-based 20/30/50
+  // Profit fields (populated when costPricing data is available)
+  sellingPrice: number;
+  profitPerUnit: number;   // sellingPrice - costPerUnit
+  totalProfit: number;     // profitPerUnit * unitsSold
+  hasCostPricingData: boolean;
   velocityClass: 'fast' | 'normal' | 'slow' | 'dead';
   stockStatus: 'critical' | 'warning' | 'healthy' | 'overstock';
   stockVsOptimal: 'understocked' | 'optimal' | 'overstocked';
@@ -56,6 +64,26 @@ export interface ABCSummary {
   revenue: number; onHandValue: number; pctRevenue: number;
 }
 
+export interface ABCProfitSummary {
+  class: 'A' | 'B' | 'C'; skuCount: number;
+  totalProfit: number; pctProfit: number;
+}
+
+export interface ParentProductSummary {
+  parentId: string;
+  parentName: string;
+  childCount: number;
+  children: SkuInventoryData[];
+  totalOnHandQty: number;
+  totalUnitsSold: number;
+  totalRevenue: number;
+  totalProfit: number;
+  abcRevClass: 'A' | 'B' | 'C';
+  abcProfitClass: 'A' | 'B' | 'C';
+  pctRevenue: number;
+  pctProfit: number;
+}
+
 export interface PerformanceMetrics {
   inventoryAccuracyRate: number; fulfillmentRate: number;
   stockoutFrequency: number; excessStockPct: number;
@@ -65,19 +93,39 @@ export interface InventorySummary {
   skus: SkuInventoryData[];
   totalOnHandQty: number; totalOnHandValue: number;
   totalInboundQty: number; totalReserveQty: number;
-  openPOs: number; poBalance: number; hasPriceData: boolean;
+  openPOs: number; poBalance: number;
+  hasPriceData: boolean; hasCostPricingData: boolean;
   categoryBreakdown: CategorySummary[];
   supplierBreakdown: SupplierSummary[];
-  abcBreakdown: ABCSummary[];
+  abcBreakdown: ABCSummary[];       // by revenue (backward compat)
+  abcByRevenue: ABCSummary[];       // by revenue
+  abcByProfit: ABCProfitSummary[];  // by profit
   performance: PerformanceMetrics;
+}
+
+// Assign ABC classes using count-based percentile split: top 20% → A, next 30% → B, bottom 50% → C
+function assignABCByCount<T>(
+  items: T[],
+  getMetric: (x: T) => number,
+  assign: (x: T, cls: 'A' | 'B' | 'C') => void,
+): void {
+  const sorted = [...items].sort((a, b) => getMetric(b) - getMetric(a));
+  const n = sorted.length;
+  if (n === 0) return;
+  const aEnd = Math.ceil(n * 0.2);
+  const bEnd = Math.ceil(n * 0.5); // 20% + 30%
+  sorted.forEach((item, i) => assign(item, i < aEnd ? 'A' : i < bEnd ? 'B' : 'C'));
 }
 
 export function computeInventoryMetrics(
   ledger: LedgerEntry[],
   orders: OrderEntry[],
-  dateRange: DateRange
+  dateRange: DateRange,
+  costPricing: CostPricingEntry[] = [],
+  supplierData: SupplierImportEntry[] = [],
 ): InventorySummary {
   const hasPriceData = orders.some(o => o.priceFound);
+  const hasCostPricingData = costPricing.length > 0;
   const today = startOfDay(new Date());
 
   const fromDate = (dateRange.option === 'custom' && dateRange.customStart)
@@ -90,6 +138,14 @@ export function computeInventoryMetrics(
   const totalDays = Math.max(1, Math.round(
     (new Date(toDate).getTime() - new Date(fromDate).getTime()) / 86400000
   ));
+
+  // Build cost pricing lookup
+  const costMap = new Map<string, CostPricingEntry>();
+  for (const cp of costPricing) costMap.set(cp.sku, cp);
+
+  // Build supplier lookup: sku → supplier entry
+  const supplierMap = new Map<string, SupplierImportEntry>();
+  for (const s of supplierData) supplierMap.set(s.sku, s);
 
   // Latest on-hand per SKU across all ledger data
   const latestLedger = new Map<string, LedgerEntry>();
@@ -123,6 +179,9 @@ export function computeInventoryMetrics(
   for (const sku of allSkus) {
     const le  = latestLedger.get(sku);
     const ord = orderAgg.get(sku);
+    const cp  = costMap.get(sku);
+    const sup = supplierMap.get(sku);
+
     const onHandQty  = le?.onHandQty ?? 0;
     const unitsSold  = ord?.units ?? 0;
     const revenue    = ord?.revenue ?? 0;
@@ -134,18 +193,26 @@ export function computeInventoryMetrics(
     const daysOfSupply  = avgDailySales > 0 ? Math.round(onHandQty / avgDailySales) : (onHandQty > 0 ? 999 : 0);
     const stockoutRiskDays = daysOfSupply;
 
-    const costPerUnit      = mockCost(sku);
+    const costPerUnit      = cp?.unitCost ?? mockCost(sku);
     const storageCostPerUnit  = mockStorage(sku);
     const handlingCostPerUnit = mockHandling(sku);
     const totalCostPerUnit    = costPerUnit + storageCostPerUnit + handlingCostPerUnit;
     const totalInventoryValue = onHandQty * costPerUnit;
+
+    const sellingPrice   = cp?.sellingPrice ?? 0;
+    const profitPerUnit  = hasCostPricingData ? sellingPrice - costPerUnit : 0;
+    const totalProfit    = hasCostPricingData ? Math.max(0, profitPerUnit) * unitsSold : 0;
 
     const inboundQty = mockInbound(onHandQty, sku);
     const reserveQty = mockReserve(onHandQty, sku);
     const poCount    = mockPOs(sku);
     const totalPOValue = poCount * inboundQty * costPerUnit;
 
-    const leadTimeDays = mockLeadTime(sku);
+    const leadTimeDays        = sup?.leadTimeDays ?? mockLeadTime(sku);
+    const onTimeDeliveryRate  = sup?.onTimeDeliveryRate ?? mockOnTime(sku);
+    const qualityScore        = sup?.qualityScore ?? mockQuality(sku);
+    const supplier            = sup?.supplierName ?? mockSupplier(sku);
+
     const optimalStock = avgDailySales > 0
       ? Math.ceil(avgDailySales * (leadTimeDays + 14))
       : Math.ceil(onHandQty * 1.2);
@@ -181,24 +248,25 @@ export function computeInventoryMetrics(
       daysOfSupply, stockoutRiskDays, oosFrequencyPct, inStockDays, oosDays,
       costPerUnit, storageCostPerUnit, handlingCostPerUnit,
       totalCostPerUnit: parseFloat(totalCostPerUnit.toFixed(2)), totalInventoryValue,
-      category: mockCategory(sku), supplier: mockSupplier(sku), leadTimeDays,
-      onTimeDeliveryRate: mockOnTime(sku), qualityScore: mockQuality(sku),
+      category: mockCategory(sku),
+      supplier, leadTimeDays, onTimeDeliveryRate, qualityScore,
       reorderQty, optimalStock, poCount, totalPOValue,
-      turnoverRatio, abcClass: 'B', // assigned below
+      turnoverRatio,
+      sellingPrice, profitPerUnit, totalProfit,
+      hasCostPricingData: !!cp,
+      abcClass: 'B',       // assigned below
+      abcRevClass: 'B',    // assigned below
+      abcProfitClass: 'B', // assigned below
       velocityClass, stockStatus, stockVsOptimal,
     });
   }
 
-  // ABC by revenue (or units if no price data)
-  const metricFn = (s: SkuInventoryData) => hasPriceData ? s.revenue : s.unitsSold;
-  const sorted = [...skus].sort((a, b) => metricFn(b) - metricFn(a));
-  const totalMetric = sorted.reduce((s, x) => s + metricFn(x), 0);
-  let cum = 0;
-  for (const s of sorted) {
-    cum += metricFn(s);
-    const pct = totalMetric > 0 ? cum / totalMetric : 1;
-    s.abcClass = pct <= 0.8 ? 'A' : pct <= 0.95 ? 'B' : 'C';
-  }
+  // ABC by Revenue (count-based: top 20% → A, next 30% → B, bottom 50% → C)
+  const revenueMetric = (s: SkuInventoryData) => hasPriceData ? s.revenue : s.unitsSold;
+  assignABCByCount(skus, revenueMetric, (s, cls) => { s.abcRevClass = cls; s.abcClass = cls; });
+
+  // ABC by Profit (only meaningful when costPricing data exists)
+  assignABCByCount(skus, s => s.totalProfit, (s, cls) => { s.abcProfitClass = cls; });
 
   // Totals
   const totalOnHandQty   = skus.reduce((s, x) => s + x.onHandQty, 0);
@@ -239,20 +307,36 @@ export function computeInventoryMetrics(
     totalPOValue: items.reduce((s, x) => s + x.totalPOValue, 0),
   }));
 
-  // ABC breakdown
-  const abcBuckets: Record<'A' | 'B' | 'C', SkuInventoryData[]> = { A: [], B: [], C: [] };
-  for (const s of skus) abcBuckets[s.abcClass].push(s);
-  const totalRev   = skus.reduce((s, x) => s + x.revenue, 0);
-  const abcBreakdown: ABCSummary[] = (['A', 'B', 'C'] as const).map(cls => ({
+  // ABC by Revenue breakdown summary
+  const abcRevBuckets: Record<'A' | 'B' | 'C', SkuInventoryData[]> = { A: [], B: [], C: [] };
+  for (const s of skus) abcRevBuckets[s.abcRevClass].push(s);
+  const totalRev = skus.reduce((s, x) => s + x.revenue, 0);
+  const abcByRevenue: ABCSummary[] = (['A', 'B', 'C'] as const).map(cls => ({
     class: cls,
-    skuCount: abcBuckets[cls].length,
-    unitsSold: abcBuckets[cls].reduce((s, x) => s + x.unitsSold, 0),
-    revenue: abcBuckets[cls].reduce((s, x) => s + x.revenue, 0),
-    onHandValue: abcBuckets[cls].reduce((s, x) => s + x.totalInventoryValue, 0),
+    skuCount: abcRevBuckets[cls].length,
+    unitsSold: abcRevBuckets[cls].reduce((s, x) => s + x.unitsSold, 0),
+    revenue: abcRevBuckets[cls].reduce((s, x) => s + x.revenue, 0),
+    onHandValue: abcRevBuckets[cls].reduce((s, x) => s + x.totalInventoryValue, 0),
     pctRevenue: totalRev > 0
-      ? parseFloat(((abcBuckets[cls].reduce((s, x) => s + x.revenue, 0) / totalRev) * 100).toFixed(1))
+      ? parseFloat(((abcRevBuckets[cls].reduce((s, x) => s + x.revenue, 0) / totalRev) * 100).toFixed(1))
       : 0,
   }));
+
+  // ABC by Profit breakdown summary
+  const abcProfBuckets: Record<'A' | 'B' | 'C', SkuInventoryData[]> = { A: [], B: [], C: [] };
+  for (const s of skus) abcProfBuckets[s.abcProfitClass].push(s);
+  const totalProfit = skus.reduce((s, x) => s + x.totalProfit, 0);
+  const abcByProfit: ABCProfitSummary[] = (['A', 'B', 'C'] as const).map(cls => ({
+    class: cls,
+    skuCount: abcProfBuckets[cls].length,
+    totalProfit: abcProfBuckets[cls].reduce((s, x) => s + x.totalProfit, 0),
+    pctProfit: totalProfit > 0
+      ? parseFloat(((abcProfBuckets[cls].reduce((s, x) => s + x.totalProfit, 0) / totalProfit) * 100).toFixed(1))
+      : 0,
+  }));
+
+  // Keep abcBreakdown as alias for backward compat
+  const abcBreakdown = abcByRevenue;
 
   // Performance
   const criticalCount = skus.filter(s => s.stockStatus === 'critical').length;
@@ -267,7 +351,65 @@ export function computeInventoryMetrics(
 
   return {
     skus, totalOnHandQty, totalOnHandValue, totalInboundQty, totalReserveQty,
-    openPOs, poBalance, hasPriceData,
-    categoryBreakdown, supplierBreakdown, abcBreakdown, performance,
+    openPOs, poBalance, hasPriceData, hasCostPricingData,
+    categoryBreakdown, supplierBreakdown,
+    abcBreakdown, abcByRevenue, abcByProfit,
+    performance,
   };
+}
+
+// ─── Parent Product Summaries ────────────────────────────────────────────────
+// Groups SKUs into parent products and assigns ABC classes at the parent level.
+export function computeParentSummaries(
+  skus: SkuInventoryData[],
+  parentProducts: ParentProductEntry[],
+): ParentProductSummary[] {
+  if (parentProducts.length === 0 || skus.length === 0) return [];
+
+  const skuMap = new Map<string, SkuInventoryData>();
+  for (const s of skus) skuMap.set(s.sku, s);
+
+  // Group child SKUs under each parent
+  const parentMap = new Map<string, { parentId: string; parentName: string; children: SkuInventoryData[] }>();
+  for (const pp of parentProducts) {
+    const child = skuMap.get(pp.childSku);
+    if (!child) continue;
+    const existing = parentMap.get(pp.parentId);
+    if (existing) {
+      existing.children.push(child);
+    } else {
+      parentMap.set(pp.parentId, { parentId: pp.parentId, parentName: pp.parentName || pp.parentId, children: [child] });
+    }
+  }
+
+  if (parentMap.size === 0) return [];
+
+  const summaries: ParentProductSummary[] = Array.from(parentMap.values()).map(({ parentId, parentName, children }) => ({
+    parentId,
+    parentName,
+    childCount: children.length,
+    children,
+    totalOnHandQty:  children.reduce((s, x) => s + x.onHandQty, 0),
+    totalUnitsSold:  children.reduce((s, x) => s + x.unitsSold, 0),
+    totalRevenue:    children.reduce((s, x) => s + x.revenue, 0),
+    totalProfit:     children.reduce((s, x) => s + x.totalProfit, 0),
+    abcRevClass:    'B' as 'A' | 'B' | 'C',
+    abcProfitClass: 'B' as 'A' | 'B' | 'C',
+    pctRevenue: 0,
+    pctProfit: 0,
+  }));
+
+  // Assign ABC classes using the same count-based 20/30/50 split
+  assignABCByCount(summaries, s => s.totalRevenue, (s, cls) => { s.abcRevClass = cls; });
+  assignABCByCount(summaries, s => s.totalProfit,  (s, cls) => { s.abcProfitClass = cls; });
+
+  // Compute percentages
+  const totalRev    = summaries.reduce((s, x) => s + x.totalRevenue, 0);
+  const totalProfit = summaries.reduce((s, x) => s + x.totalProfit, 0);
+  for (const s of summaries) {
+    s.pctRevenue = totalRev    > 0 ? parseFloat(((s.totalRevenue / totalRev)       * 100).toFixed(1)) : 0;
+    s.pctProfit  = totalProfit > 0 ? parseFloat(((s.totalProfit  / totalProfit)    * 100).toFixed(1)) : 0;
+  }
+
+  return summaries;
 }

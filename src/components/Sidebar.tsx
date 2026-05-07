@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export type Page = 'forecast' | 'inventory';
+export type Page = 'forecast' | 'inventory' | 'import';
 
 interface Props {
   currentPage: Page;
@@ -64,6 +64,15 @@ export default function Sidebar({ currentPage, onNavigate }: Props) {
             <span className="sidebar__item-icon"><WarehouseIcon /></span>
             {!collapsed && <span className="sidebar__item-label">Inventory Overview</span>}
           </button>
+
+          <button
+            className={`sidebar__item${currentPage === 'import' ? ' sidebar__item--active' : ''}`}
+            onClick={() => go('import')}
+            title={collapsed ? 'Data Import' : undefined}
+          >
+            <span className="sidebar__item-icon"><UploadIcon /></span>
+            {!collapsed && <span className="sidebar__item-label">Data Import</span>}
+          </button>
         </nav>
 
         {!collapsed && (
@@ -109,6 +118,16 @@ function WarehouseIcon() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       <polyline points="9 22 9 12 15 12 15 22" />
+    </svg>
+  );
+}
+
+function UploadIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="17 8 12 3 7 8" />
+      <line x1="12" y1="3" x2="12" y2="15" />
     </svg>
   );
 }

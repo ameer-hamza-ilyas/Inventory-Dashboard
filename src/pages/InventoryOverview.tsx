@@ -1,22 +1,22 @@
-import { useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../context/AppContext';
 import {
-  computeInventoryMetrics,
-  SkuInventoryData, InventorySummary, CategorySummary, SupplierSummary, ABCSummary, PerformanceMetrics,
+  computeInventoryMetrics, computeParentSummaries,
+  SkuInventoryData, InventorySummary, CategorySummary, SupplierSummary, ABCSummary, ABCProfitSummary, ParentProductSummary, PerformanceMetrics,
 } from '../utils/inventoryCalculations';
-import FileImport from '../components/FileImport';
+import type { ParentProductEntry } from '../types';
 import DateRangeFilter from '../components/DateRangeFilter';
 
 // ─── Main Page Component ─────────────────────────────────────────────────────
 
 export default function InventoryOverview() {
   const { state } = useAppContext();
-  const { ledger, orders, dateRange } = state;
+  const { ledger, orders, dateRange, costPricing, supplierData, parentProducts } = state;
   const hasData = ledger.length > 0 || orders.length > 0;
 
   const summary = useMemo(
-    () => computeInventoryMetrics(ledger, orders, dateRange),
-    [ledger, orders, dateRange]
+    () => computeInventoryMetrics(ledger, orders, dateRange, costPricing, supplierData),
+    [ledger, orders, dateRange, costPricing, supplierData]
   );
 
   return (
@@ -27,14 +27,6 @@ export default function InventoryOverview() {
       </div>
 
       <div className="page__body">
-        <section className="section">
-          <h2 className="section__title">Data Import</h2>
-          <div className="import-grid">
-            <FileImport type="ledger" />
-            <FileImport type="orders" />
-          </div>
-        </section>
-
         <section className="section">
           <h2 className="section__title">Date Range Filter</h2>
           <DateRangeFilter />
@@ -58,7 +50,7 @@ export default function InventoryOverview() {
             <ReplenishmentSection skus={summary.skus} />
             <DemandSupplySection skus={summary.skus} hasPriceData={summary.hasPriceData} />
             <PerformanceSection performance={summary.performance} skus={summary.skus} />
-            <ABCSection skus={summary.skus} abcBreakdown={summary.abcBreakdown} hasPriceData={summary.hasPriceData} />
+            <ABCSection skus={summary.skus} parentProducts={parentProducts} hasPriceData={summary.hasPriceData} hasCostPricingData={summary.hasCostPricingData} />
             <CostAnalysisSection skus={summary.skus} />
             <SupplierSection suppliers={summary.supplierBreakdown} />
             <CategorySection categories={summary.categoryBreakdown} hasPriceData={summary.hasPriceData} />
@@ -619,61 +611,143 @@ function PerformanceSection({ performance, skus }: { performance: PerformanceMet
   );
 }
 
-// ─── 7. ABC Analysis ────────────────────────────────────────────────────────
+// ─── 7. ABC Analysis (unified, parent-product view) ─────────────────────────
 
-function ABCSection({ skus, abcBreakdown, hasPriceData }: { skus: SkuInventoryData[]; abcBreakdown: ABCSummary[]; hasPriceData: boolean }) {
-  const sort = useSortDir('asc');
+function ABCSection({ skus, parentProducts, hasPriceData, hasCostPricingData }: {
+  skus: SkuInventoryData[];
+  parentProducts: ParentProductEntry[];
+  hasPriceData: boolean;
+  hasCostPricingData: boolean;
+}) {
+  const [mode, setMode] = useState<'revenue' | 'profit'>('revenue');
   const [filter, setFilter] = useState('');
   const [classFilter, setClassFilter] = useState<'all' | 'A' | 'B' | 'C'>('all');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const sort = useSortDir('desc');
+
+  const parentSummaries = useMemo(
+    () => computeParentSummaries(skus, parentProducts),
+    [skus, parentProducts]
+  );
+
+  const activeClass = (s: ParentProductSummary) => mode === 'revenue' ? s.abcRevClass : s.abcProfitClass;
+  const activeValue = (s: ParentProductSummary) => mode === 'revenue' ? s.totalRevenue : s.totalProfit;
+
+  const totalAll = parentSummaries.reduce((sum, x) => sum + activeValue(x), 0);
+  const abcCards = (['A', 'B', 'C'] as const).map(cls => ({
+    class: cls,
+    count: parentSummaries.filter(s => activeClass(s) === cls).length,
+    total: parentSummaries.filter(s => activeClass(s) === cls).reduce((sum, x) => sum + activeValue(x), 0),
+  }));
 
   const data = useMemo(() => {
-    let d = skus;
-    if (filter) d = d.filter(s => s.sku.toLowerCase().includes(filter.toLowerCase()));
-    if (classFilter !== 'all') d = d.filter(s => s.abcClass === classFilter);
+    let d = parentSummaries;
+    if (filter) d = d.filter(s =>
+      s.parentName.toLowerCase().includes(filter.toLowerCase()) ||
+      s.parentId.toLowerCase().includes(filter.toLowerCase())
+    );
+    if (classFilter !== 'all') d = d.filter(s => activeClass(s) === classFilter);
     return [...d].sort((a, b) => {
-      const v = (x: SkuInventoryData) => sort.key === 'revenue' ? x.revenue : sort.key === 'unitsSold' ? x.unitsSold : x.onHandQty;
+      const v = (x: ParentProductSummary) =>
+        sort.key === 'value'     ? activeValue(x)
+        : sort.key === 'unitsSold' ? x.totalUnitsSold
+        : sort.key === 'onHand'    ? x.totalOnHandQty
+        : sort.key === 'class'     ? activeClass(x).charCodeAt(0)
+        : sort.key === 'name'      ? x.parentName.toLowerCase().charCodeAt(0)
+        : activeValue(x);
       return sort.dir === 'asc' ? v(a) - v(b) : v(b) - v(a);
     });
-  }, [skus, sort.key, sort.dir, filter, classFilter]);
+  }, [parentSummaries, filter, classFilter, mode, sort.key, sort.dir]);
 
-  const abcColors = { A: '#2563eb', B: '#7c3aed', C: '#64748b' };
-  const total = abcBreakdown.reduce((s, x) => s + x.skuCount, 0);
+  function toggleExpand(id: string) {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
 
   function doExport() {
-    dlCsv('abc_analysis.csv',
-      ['SKU', 'ABC Class', 'Units Sold', 'Revenue', 'On Hand Value', 'Avg Daily Sales'],
-      data.map(s => [s.sku, s.abcClass, s.unitsSold, s.revenue.toFixed(2), s.totalInventoryValue.toFixed(2), s.avgDailySales])
+    const filename = mode === 'revenue' ? 'ABC_Analysis_By_Revenue.csv' : 'ABC_Analysis_By_Profit.csv';
+    const valueLabel = mode === 'revenue' ? 'Total Revenue' : 'Total Profit';
+    const classLabel = mode === 'revenue' ? 'ABC Class (Revenue)' : 'ABC Class (Profit)';
+    dlCsv(filename,
+      ['Parent Product ID', 'Parent Product Name', 'Child SKU Count', 'Total On Hand', 'Total Units Sold', valueLabel, classLabel, '% of Total'],
+      data.map(s => [
+        s.parentId, s.parentName, s.childCount,
+        s.totalOnHandQty, s.totalUnitsSold,
+        activeValue(s).toFixed(2), activeClass(s),
+        totalAll > 0 ? ((activeValue(s) / totalAll) * 100).toFixed(2) + '%' : '0%',
+      ])
+    );
+  }
+
+  if (parentProducts.length === 0) {
+    return (
+      <SectionCard title="ABC Analysis" icon="🔢">
+        <div className="inv-no-data-msg">
+          <span className="inv-no-data-msg__icon">🗂️</span>
+          <div>
+            <strong>Parent Product Report required</strong>
+            <p>Please import the <strong>Parent Product Report</strong> in Data Import to enable ABC Analysis by Parent Product.</p>
+          </div>
+        </div>
+      </SectionCard>
     );
   }
 
   return (
     <SectionCard title="ABC Analysis" icon="🔢" onExport={doExport}>
+      {/* Mode dropdown + description */}
+      <div className="inv-abc-controls">
+        <div className="inv-abc-mode-wrap">
+          <label className="inv-abc-mode-label">Analysis Mode</label>
+          <select
+            className="inv-abc-mode-select"
+            value={mode}
+            onChange={e => { setMode(e.target.value as 'revenue' | 'profit'); setClassFilter('all'); setExpanded(new Set()); }}
+          >
+            <option value="revenue">By Revenue</option>
+            <option value="profit">By Profit</option>
+          </select>
+        </div>
+        <p className="inv-abc-desc" style={{ margin: 0 }}>
+          {mode === 'revenue'
+            ? 'Parent products ranked by total revenue. Top 20% → A, next 30% → B, bottom 50% → C.'
+            : 'Parent products ranked by total profit (Selling Price − Unit Cost × Units Sold). Top 20% → A, next 30% → B, bottom 50% → C.'}
+        </p>
+      </div>
+
+      {mode === 'profit' && !hasCostPricingData && (
+        <div className="inv-no-data-msg" style={{ marginBottom: 16 }}>
+          <span className="inv-no-data-msg__icon">💰</span>
+          <div>
+            <strong>Cost &amp; Pricing data required for Profit mode</strong>
+            <p>Import the Cost &amp; Pricing Report in <strong>Data Import</strong> to see profit-based classifications.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Summary cards */}
       <div className="inv-abc-summary">
-        {abcBreakdown.map(ab => (
+        {abcCards.map(ab => (
           <div key={ab.class} className={`inv-abc-card inv-abc-card--${ab.class.toLowerCase()}`}>
             <div className="inv-abc-card__class">{ab.class}</div>
-            <div className="inv-abc-card__count">{ab.skuCount} SKUs</div>
-            <div className="inv-abc-card__pct">{total > 0 ? Math.round((ab.skuCount / total) * 100) : 0}% of SKUs</div>
-            <div className="inv-abc-card__metric">{fmt(ab.unitsSold)} units sold</div>
-            {hasPriceData && <div className="inv-abc-card__rev">{fmtUsd(ab.revenue)} revenue</div>}
+            <div className="inv-abc-card__count">{ab.count} products</div>
+            <div className="inv-abc-card__pct">{parentSummaries.length > 0 ? Math.round((ab.count / parentSummaries.length) * 100) : 0}% of products</div>
+            <div className="inv-abc-card__rev">{fmtUsd(ab.total)}</div>
           </div>
         ))}
       </div>
 
-      <div className="inv-abc-bar-wrap">
-        {total > 0 && (
-          <div className="inv-abc-stacked">
-            {abcBreakdown.map(ab => (
-              <div key={ab.class} className="inv-abc-stacked__seg" style={{ width: `${(ab.skuCount / total) * 100}%`, background: abcColors[ab.class] }} title={`${ab.class}: ${ab.skuCount} SKUs`}>
-                {(ab.skuCount / total) > 0.08 && ab.class}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
+      {/* Filters */}
       <div className="inv-filter-row">
-        <input className="inv-filter-input" placeholder="Filter by SKU…" value={filter} onChange={e => setFilter(e.target.value)} />
+        <input
+          className="inv-filter-input"
+          placeholder="Filter by parent product name or ID…"
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+        />
         <div style={{ display: 'flex', gap: 6 }}>
           {(['all', 'A', 'B', 'C'] as const).map(c => (
             <button key={c} className={`btn btn--outline${classFilter === c ? ' btn--active' : ''}`} style={{ padding: '5px 12px', fontSize: 12 }} onClick={() => setClassFilter(c)}>
@@ -681,33 +755,69 @@ function ABCSection({ skus, abcBreakdown, hasPriceData }: { skus: SkuInventoryDa
             </button>
           ))}
         </div>
+        <span className="inv-filter-count">{data.length} of {parentSummaries.length} products</span>
       </div>
 
+      {/* Table */}
       <div className="table-wrapper">
         <table className="inv-table">
           <thead>
             <tr>
-              <th className="inv-th">SKU</th>
-              <th className="inv-th">ABC Class</th>
+              <th className="inv-th inv-th--expand" />
+              <Th label="Parent Product" sortKey="name"      active={sort.key==='name'}      dir={sort.dir} onSort={sort.toggle} />
+              <th className="inv-th">Parent ID</th>
+              <th className="inv-th">Child SKUs</th>
+              <Th label="On Hand"    sortKey="onHand"    active={sort.key==='onHand'}    dir={sort.dir} onSort={sort.toggle} />
               <Th label="Units Sold" sortKey="unitsSold" active={sort.key==='unitsSold'} dir={sort.dir} onSort={sort.toggle} />
-              {hasPriceData && <Th label="Revenue" sortKey="revenue" active={sort.key==='revenue'} dir={sort.dir} onSort={sort.toggle} />}
-              <th className="inv-th">On Hand Value</th>
-              <th className="inv-th">Avg Daily Sales</th>
-              <th className="inv-th">Status</th>
+              <Th label={mode === 'revenue' ? 'Total Revenue' : 'Total Profit'} sortKey="value" active={sort.key==='value'} dir={sort.dir} onSort={sort.toggle} />
+              <Th label="ABC Class"  sortKey="class"     active={sort.key==='class'}     dir={sort.dir} onSort={sort.toggle} />
+              <th className="inv-th">% of Total</th>
             </tr>
           </thead>
           <tbody>
-            {data.map(s => (
-              <tr key={s.sku} className="inv-tr">
-                <td className="inv-td inv-td--sku">{s.sku}</td>
-                <td className="inv-td"><ABCBadge c={s.abcClass} /></td>
-                <td className="inv-td">{fmt(s.unitsSold)}</td>
-                {hasPriceData && <td className="inv-td inv-td--rev">{fmtUsd(s.revenue)}</td>}
-                <td className="inv-td">{fmtUsd(s.totalInventoryValue)}</td>
-                <td className="inv-td">{fmt(s.avgDailySales, 2)}/day</td>
-                <td className="inv-td"><StatusBadge status={s.stockStatus} /></td>
-              </tr>
-            ))}
+            {data.map(parent => {
+              const cls = activeClass(parent);
+              const val = activeValue(parent);
+              const isOpen = expanded.has(parent.parentId);
+              const trCls = cls === 'A' ? 'inv-tr inv-tr--abc-a' : cls === 'B' ? 'inv-tr inv-tr--abc-b' : 'inv-tr inv-tr--abc-c';
+              return (
+                <React.Fragment key={parent.parentId}>
+                  <tr className={`${trCls} inv-tr--parent`} onClick={() => toggleExpand(parent.parentId)}>
+                    <td className="inv-td inv-td--expand">
+                      <span className={`inv-expand-icon${isOpen ? ' inv-expand-icon--open' : ''}`}>▶</span>
+                    </td>
+                    <td className="inv-td inv-td--bold">{parent.parentName}</td>
+                    <td className="inv-td inv-td--mono">{parent.parentId}</td>
+                    <td className="inv-td">{parent.childCount}</td>
+                    <td className="inv-td">{fmt(parent.totalOnHandQty)}</td>
+                    <td className="inv-td">{fmt(parent.totalUnitsSold)}</td>
+                    <td className="inv-td inv-td--rev">{fmtUsd(val)}</td>
+                    <td className="inv-td"><ABCBadge c={cls} /></td>
+                    <td className="inv-td">{totalAll > 0 ? ((val / totalAll) * 100).toFixed(1) + '%' : '—'}</td>
+                  </tr>
+                  {isOpen && parent.children.map(child => {
+                    const childVal = mode === 'revenue' ? child.revenue : child.totalProfit;
+                    return (
+                      <tr key={child.sku} className="inv-tr inv-tr--child">
+                        <td className="inv-td" />
+                        <td className="inv-td inv-td--child" colSpan={2}>
+                          <span className="inv-child-indent">└</span>
+                          <span className="inv-td--sku">{child.sku}</span>
+                          {child.asin && <span className="inv-child-meta"> · {child.asin}</span>}
+                          {child.fnsku && <span className="inv-child-meta"> · {child.fnsku}</span>}
+                        </td>
+                        <td className="inv-td inv-td--muted">—</td>
+                        <td className="inv-td inv-td--muted">{fmt(child.onHandQty)}</td>
+                        <td className="inv-td inv-td--muted">{fmt(child.unitsSold)}</td>
+                        <td className="inv-td inv-td--muted">{fmtUsd(childVal)}</td>
+                        <td className="inv-td"><ABCBadge c={cls} /></td>
+                        <td className="inv-td inv-td--muted">{val > 0 ? ((childVal / val) * 100).toFixed(1) + '%' : '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -68,3 +68,25 @@ export interface WeightConfig {
 export const DEFAULT_WEIGHT: WeightConfig = {
   w7: 20, w15: 20, w30: 20, w60: 20, w90: 20,
 };
+
+export interface CostPricingEntry {
+  sku: string;
+  unitCost: number;
+  sellingPrice: number;
+}
+
+export interface SupplierImportEntry {
+  supplierName: string;
+  sku: string;
+  leadTimeDays: number;
+  onTimeDeliveryRate: number;
+  qualityScore: number;
+}
+
+export interface ParentProductEntry {
+  parentId: string;
+  parentName: string;
+  childSku: string;
+  childAsin: string;
+  childFnsku: string;
+}

@@ -4,6 +4,7 @@ import { useAppContext } from '../context/AppContext';
 import { computeForecasts } from '../utils/calculations';
 import { exportForecastCsv } from '../utils/exportCsv';
 import MiniChart from './MiniChart';
+import ExpandedChart from './ExpandedChart';
 import SummaryChart from './SummaryChart';
 import WeightModal from './WeightModal';
 import type { SkuForecast, SortKey, SortDir, FilterKey, DateRange, WeightConfig } from '../types';
@@ -488,7 +489,7 @@ export default function ForecastTable() {
                               ✕ Close
                             </button>
                           </div>
-                          <MiniChart data={row.dailyData} height={200} showLabels />
+                          <ExpandedChart data={row.dailyData} hasPriceData={row.hasPriceData} />
                         </div>
                       </td>
                     </tr>

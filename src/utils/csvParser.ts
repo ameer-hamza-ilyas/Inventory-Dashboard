@@ -195,15 +195,16 @@ export function parseOrdersCsv(text: string): OrderEntry[] {
 }
 
 // ─── Cost & Pricing Report ────────────────────────────────────────────────────
-// Expected columns: SKU, Unit Cost, Selling Price
+// Expected columns: SKU, Unit Cost, Selling Price, Associated Fees (optional)
 export function parseCostPricingCsv(text: string): CostPricingEntry[] {
   const rows = parseCsvText(text);
   if (rows.length === 0) return [];
   const first = rows[0];
 
   const skuCol   = findCol(first, ['sku', 'merchantsku', 'sellersku', 'msku', 'asin', 'skuid']);
-  const costCol  = findCol(first, ['unitcost', 'cost', 'costperunit', 'purchasecost', 'cogs', 'landedcost', 'buyingcost']);
+  const costCol  = findCol(first, ['unitcost', 'unitcostcogs', 'cost', 'costperunit', 'purchasecost', 'cogs', 'landedcost', 'buyingcost']);
   const priceCol = findCol(first, ['sellingprice', 'price', 'listprice', 'saleprice', 'retailprice', 'salesprice']);
+  const feesCol  = findCol(first, ['associatedfees', 'fees', 'storagefees', 'handlingfees', 'totalfees', 'amazonfees']);
 
   if (!skuCol || !costCol || !priceCol) {
     throw new Error(
@@ -215,27 +216,29 @@ export function parseCostPricingCsv(text: string): CostPricingEntry[] {
 
   const map = new Map<string, CostPricingEntry>();
   for (const row of rows) {
-    const sku          = (row[skuCol]   ?? '').trim();
-    const unitCost     = parseFloat((row[costCol]  ?? '0').replace(/[^0-9.\-]/g, '')) || 0;
-    const sellingPrice = parseFloat((row[priceCol] ?? '0').replace(/[^0-9.\-]/g, '')) || 0;
+    const sku            = (row[skuCol]   ?? '').trim();
+    const unitCost       = parseFloat((row[costCol]  ?? '0').replace(/[^0-9.\-]/g, '')) || 0;
+    const sellingPrice   = parseFloat((row[priceCol] ?? '0').replace(/[^0-9.\-]/g, '')) || 0;
+    const associatedFees = feesCol ? (parseFloat((row[feesCol] ?? '0').replace(/[^0-9.\-]/g, '')) || 0) : 0;
     if (!sku) continue;
-    map.set(sku, { sku, unitCost, sellingPrice });
+    map.set(sku, { sku, unitCost, sellingPrice, associatedFees });
   }
   return Array.from(map.values());
 }
 
 // ─── Supplier Data ────────────────────────────────────────────────────────────
-// Expected columns: Supplier Name, SKU, Lead Time Days, On-Time Delivery Rate, Quality Score
+// Expected columns: Supplier ID (optional), Supplier Name, SKU, Lead Time Days, On-Time Delivery Rate, Quality Score
 export function parseSupplierCsv(text: string): SupplierImportEntry[] {
   const rows = parseCsvText(text);
   if (rows.length === 0) return [];
   const first = rows[0];
 
-  const supplierCol = findCol(first, ['suppliername', 'supplier', 'vendor', 'vendorname', 'manufacturer']);
-  const skuCol      = findCol(first, ['sku', 'merchantsku', 'sellersku', 'msku', 'skuid']);
-  const leadCol     = findCol(first, ['leadtime', 'leadtimedays', 'leaddays', 'deliverytimedays', 'deliverytime']);
-  const onTimeCol   = findCol(first, ['ontimedelivery', 'ontime', 'ontimerate', 'deliveryrate', 'deliveryscore', 'ontimedeliveryrate', 'ontimepct']);
-  const qualityCol  = findCol(first, ['qualityscore', 'quality', 'qualityrate', 'score', 'qualitypct']);
+  const supplierIdCol = findCol(first, ['supplierid', 'vendorid', 'suppliercode', 'supplieridentifier']);
+  const supplierCol   = findCol(first, ['suppliername', 'supplier', 'vendor', 'vendorname', 'manufacturer']);
+  const skuCol        = findCol(first, ['sku', 'merchantsku', 'sellersku', 'msku', 'skuid']);
+  const leadCol       = findCol(first, ['leadtime', 'leadtimedays', 'leaddays', 'deliverytimedays', 'deliverytime']);
+  const onTimeCol     = findCol(first, ['ontimedelivery', 'ontime', 'ontimerate', 'deliveryrate', 'deliveryscore', 'ontimedeliveryrate', 'ontimepct']);
+  const qualityCol    = findCol(first, ['qualityscore', 'quality', 'qualityrate', 'score', 'qualitypct']);
 
   if (!supplierCol || !skuCol) {
     throw new Error(
@@ -247,6 +250,7 @@ export function parseSupplierCsv(text: string): SupplierImportEntry[] {
 
   return rows
     .map(row => ({
+      supplierId:         supplierIdCol ? (row[supplierIdCol] ?? '').trim() : '',
       supplierName:       (row[supplierCol] ?? '').trim(),
       sku:                (row[skuCol]      ?? '').trim(),
       leadTimeDays:       leadCol    ? (parseInt((row[leadCol]    ?? '0').replace(/[^0-9]/g,   '')) || 0) : 0,
@@ -254,6 +258,112 @@ export function parseSupplierCsv(text: string): SupplierImportEntry[] {
       qualityScore:       qualityCol ? (parseFloat((row[qualityCol] ?? '0').replace(/[^0-9.]/g, '')) || 0) : 0,
     }))
     .filter(e => e.supplierName && e.sku);
+}
+
+// ─── Master Data Report (unified) ────────────────────────────────────────────
+// Single CSV combining supplier info, product hierarchy, and cost/pricing.
+// Required: Child SKU. Each section (pricing, supplier, hierarchy) is parsed
+// independently — rows with partial data still contribute to the sections they satisfy.
+export function parseMasterDataCsv(text: string): {
+  costPricing: CostPricingEntry[];
+  supplierData: SupplierImportEntry[];
+  parentProducts: ParentProductEntry[];
+} {
+  const rows = parseCsvText(text);
+  if (rows.length === 0) return { costPricing: [], supplierData: [], parentProducts: [] };
+  const first = rows[0];
+
+  const childSkuCol   = findCol(first, ['childsku', 'sku', 'merchantsku', 'sellersku', 'msku', 'skuid']);
+  const childAsinCol  = findCol(first, ['childasin', 'asin']);
+  const childFnskuCol = findCol(first, ['childfnsku', 'fnsku']);
+
+  const costCol        = findCol(first, ['unitcost', 'unitcostcogs', 'cost', 'cogs', 'costperunit', 'purchasecost', 'landedcost']);
+  const priceCol       = findCol(first, ['sellingprice', 'price', 'listprice', 'saleprice', 'retailprice']);
+  const feesCol        = findCol(first, ['associatedfees', 'fees', 'storagefees', 'handlingfees', 'totalfees', 'amazonfees']);
+
+  const supplierIdCol  = findCol(first, ['supplierid', 'vendorid', 'suppliercode']);
+  const supplierCol    = findCol(first, ['suppliername', 'supplier', 'vendor', 'vendorname', 'manufacturer']);
+  const leadCol        = findCol(first, ['leadtimedays', 'leadtime', 'leaddays', 'deliverytimedays']);
+  const onTimeCol      = findCol(first, ['ontimedeliveryrate', 'ontimedelivery', 'ontime', 'ontimerate', 'deliveryrate', 'ontimepct']);
+  const qualityCol     = findCol(first, ['qualityscore', 'quality', 'qualityrate', 'score', 'qualitypct']);
+
+  const parentIdCol    = findCol(first, ['parentproductid', 'parentid', 'parentasin', 'parent', 'parentsku']);
+  const parentNameCol  = findCol(first, ['parentproductname', 'parentname', 'productname', 'parenttitle']);
+
+  if (!childSkuCol) {
+    throw new Error(
+      `Could not identify a SKU column in the Master Data Report.\n` +
+      `Expected a "Child SKU" or "SKU" column.\n` +
+      `Found columns: ${Object.keys(first).join(', ')}`
+    );
+  }
+
+  const hasCostPricing  = !!(costCol && priceCol);
+  const hasSupplier     = !!supplierCol;
+  const hasHierarchy    = !!parentIdCol;
+
+  if (!hasCostPricing && !hasSupplier && !hasHierarchy) {
+    throw new Error(
+      `No recognizable data sections found in the Master Data Report.\n` +
+      `Expected pricing columns (Unit Cost, Selling Price), supplier columns (Supplier Name),\n` +
+      `or hierarchy columns (Parent Product ID).\n` +
+      `Found columns: ${Object.keys(first).join(', ')}`
+    );
+  }
+
+  const costMap    = new Map<string, CostPricingEntry>();
+  const supMap     = new Map<string, SupplierImportEntry>();
+  const parentMap  = new Map<string, ParentProductEntry>();
+
+  for (const row of rows) {
+    const sku = childSkuCol ? (row[childSkuCol] ?? '').trim() : '';
+    if (!sku) continue;
+
+    if (hasCostPricing) {
+      const unitCost       = parseFloat((row[costCol!]  ?? '0').replace(/[^0-9.\-]/g, '')) || 0;
+      const sellingPrice   = parseFloat((row[priceCol!] ?? '0').replace(/[^0-9.\-]/g, '')) || 0;
+      const associatedFees = feesCol ? (parseFloat((row[feesCol] ?? '0').replace(/[^0-9.\-]/g, '')) || 0) : 0;
+      costMap.set(sku, { sku, unitCost, sellingPrice, associatedFees });
+    }
+
+    if (hasSupplier) {
+      const supplierName = (row[supplierCol!] ?? '').trim();
+      if (supplierName) {
+        supMap.set(sku, {
+          supplierId:         supplierIdCol ? (row[supplierIdCol] ?? '').trim() : '',
+          supplierName,
+          sku,
+          leadTimeDays:       leadCol   ? (parseInt((row[leadCol]   ?? '0').replace(/[^0-9]/g,   '')) || 0) : 0,
+          onTimeDeliveryRate: onTimeCol ? (parseFloat((row[onTimeCol] ?? '0').replace(/[^0-9.]/g, '')) || 0) : 0,
+          qualityScore:       qualityCol? (parseFloat((row[qualityCol]?? '0').replace(/[^0-9.]/g, '')) || 0) : 0,
+        });
+      }
+    }
+
+    if (hasHierarchy) {
+      const parentId = (row[parentIdCol!] ?? '').trim();
+      if (parentId) {
+        const childAsin  = childAsinCol  ? (row[childAsinCol]  ?? '').trim() : '';
+        const childFnsku = childFnskuCol ? (row[childFnskuCol] ?? '').trim() : '';
+        const key = `${parentId}|${sku}`;
+        if (!parentMap.has(key)) {
+          parentMap.set(key, {
+            parentId,
+            parentName: parentNameCol ? (row[parentNameCol] ?? '').trim() || parentId : parentId,
+            childSku:   sku,
+            childAsin,
+            childFnsku,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    costPricing:    Array.from(costMap.values()),
+    supplierData:   Array.from(supMap.values()),
+    parentProducts: Array.from(parentMap.values()),
+  };
 }
 
 // ─── Parent Product Mapping ───────────────────────────────────────────────────

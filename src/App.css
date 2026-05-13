@@ -2054,4 +2054,108 @@ body { background: var(--color-bg); }
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+.di-preview__empty {
+  font-size: 13px;
+  color: var(--color-muted);
+  padding: 12px 0;
+}
+
+/* ── Master Data template bar ── */
+.di-template-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--color-bg-subtle, #f8f9fa);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.di-template-bar__info {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.di-template-bar__icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.di-template-bar__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 2px;
+}
+.di-template-bar__sub {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.di-template-bar__step-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+/* ── Instructions group label ── */
+.di-instructions__group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--color-muted);
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 4px;
+}
+
+/* ── Master data preview tabs ── */
+.di-master-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 2px solid var(--color-border);
+  padding-bottom: 0;
+}
+.di-master-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  border-radius: 4px 4px 0 0;
+}
+.di-master-tab:hover {
+  color: var(--color-text);
+  background: var(--color-bg-subtle, #f3f4f6);
+}
+.di-master-tab--active {
+  color: var(--color-primary, #2563eb);
+  border-bottom-color: var(--color-primary, #2563eb);
+}
+.di-master-tab__badge {
+  background: var(--color-border);
+  color: var(--color-muted);
+  border-radius: 10px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.di-master-tab--active .di-master-tab__badge {
+  background: #dbeafe;
+  color: var(--color-primary, #2563eb);
+}
 

@@ -73,9 +73,11 @@ export interface CostPricingEntry {
   sku: string;
   unitCost: number;
   sellingPrice: number;
+  associatedFees: number;
 }
 
 export interface SupplierImportEntry {
+  supplierId: string;
   supplierName: string;
   sku: string;
   leadTimeDays: number;

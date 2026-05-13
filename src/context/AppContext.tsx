@@ -13,6 +13,7 @@ interface AppState {
   loadingCostPricing: boolean;
   loadingSupplier: boolean;
   loadingParentProducts: boolean;
+  loadingMasterData: boolean;
 }
 
 type Action =
@@ -21,17 +22,20 @@ type Action =
   | { type: 'SET_COST_PRICING'; payload: CostPricingEntry[] }
   | { type: 'SET_SUPPLIER_DATA'; payload: SupplierImportEntry[] }
   | { type: 'SET_PARENT_PRODUCTS'; payload: ParentProductEntry[] }
+  | { type: 'SET_MASTER_DATA'; payload: { costPricing: CostPricingEntry[]; supplierData: SupplierImportEntry[]; parentProducts: ParentProductEntry[] } }
   | { type: 'SET_DATE_RANGE'; payload: DateRange }
   | { type: 'SET_LOADING_LEDGER'; payload: boolean }
   | { type: 'SET_LOADING_ORDERS'; payload: boolean }
   | { type: 'SET_LOADING_COST_PRICING'; payload: boolean }
   | { type: 'SET_LOADING_SUPPLIER'; payload: boolean }
   | { type: 'SET_LOADING_PARENT_PRODUCTS'; payload: boolean }
+  | { type: 'SET_LOADING_MASTER_DATA'; payload: boolean }
   | { type: 'CLEAR_LEDGER' }
   | { type: 'CLEAR_ORDERS' }
   | { type: 'CLEAR_COST_PRICING' }
   | { type: 'CLEAR_SUPPLIER_DATA' }
-  | { type: 'CLEAR_PARENT_PRODUCTS' };
+  | { type: 'CLEAR_PARENT_PRODUCTS' }
+  | { type: 'CLEAR_MASTER_DATA' };
 
 const initialState: AppState = {
   ledger: [],
@@ -45,6 +49,7 @@ const initialState: AppState = {
   loadingCostPricing: false,
   loadingSupplier: false,
   loadingParentProducts: false,
+  loadingMasterData: false,
 };
 
 function reducer(state: AppState, action: Action): AppState {
@@ -54,17 +59,20 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_COST_PRICING':     return { ...state, costPricing: action.payload, loadingCostPricing: false };
     case 'SET_SUPPLIER_DATA':    return { ...state, supplierData: action.payload, loadingSupplier: false };
     case 'SET_PARENT_PRODUCTS':  return { ...state, parentProducts: action.payload, loadingParentProducts: false };
+    case 'SET_MASTER_DATA':      return { ...state, costPricing: action.payload.costPricing, supplierData: action.payload.supplierData, parentProducts: action.payload.parentProducts, loadingMasterData: false };
     case 'SET_DATE_RANGE':       return { ...state, dateRange: action.payload };
     case 'SET_LOADING_LEDGER':          return { ...state, loadingLedger: action.payload };
     case 'SET_LOADING_ORDERS':          return { ...state, loadingOrders: action.payload };
     case 'SET_LOADING_COST_PRICING':    return { ...state, loadingCostPricing: action.payload };
     case 'SET_LOADING_SUPPLIER':        return { ...state, loadingSupplier: action.payload };
     case 'SET_LOADING_PARENT_PRODUCTS': return { ...state, loadingParentProducts: action.payload };
+    case 'SET_LOADING_MASTER_DATA':     return { ...state, loadingMasterData: action.payload };
     case 'CLEAR_LEDGER':          return { ...state, ledger: [] };
     case 'CLEAR_ORDERS':          return { ...state, orders: [] };
     case 'CLEAR_COST_PRICING':    return { ...state, costPricing: [] };
     case 'CLEAR_SUPPLIER_DATA':   return { ...state, supplierData: [] };
     case 'CLEAR_PARENT_PRODUCTS': return { ...state, parentProducts: [] };
+    case 'CLEAR_MASTER_DATA':     return { ...state, costPricing: [], supplierData: [], parentProducts: [] };
     default: return state;
   }
 }
